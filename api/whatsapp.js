@@ -1,5 +1,3 @@
-import fetch from 'node-fetch';
-
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
