@@ -1,68 +1,90 @@
-// api/image.js — adicionar na raiz do projeto do proxy (nutriandre-proxy)
-// Requer: variável de ambiente OPENAI_API_KEY no painel do Vercel
+// api/image.js — nutriandre-proxy (Vercel)
+// Requer: OPENAI_API_KEY nas variáveis de ambiente do Vercel
 
 export default async function handler(req, res) {
 
-  // CORS — permite chamadas do Estúdio e de localhost
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Método não permitido' });
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Método não permitido' });
 
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'OPENAI_API_KEY não configurada no Vercel' });
-  }
+  if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY não configurada no Vercel' });
 
-  const {
-    prompt,
-    quality = 'standard', // 'standard' ou 'hd'
-    size    = '1024x1024', // '1024x1024' | '1024x1792' | '1792x1024'
-  } = req.body || {};
+  const { prompt, quality = 'standard', size = '1024x1024' } = req.body || {};
 
   if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 5) {
     return res.status(400).json({ error: 'Prompt inválido ou ausente' });
   }
 
-  try {
-    const response = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+  // Tenta gpt-image-1 primeiro (modelo novo), depois dall-e-2 como fallback
+  const tentativas = [
+    {
+      model: 'gpt-image-1',
+      body: {
+        model: 'gpt-image-1',
+        prompt: prompt.trim(),
+        n: 1,
+        size: size === '1792x1024' ? '1536x1024' : size === '1024x1792' ? '1024x1536' : '1024x1024',
+        quality: quality === 'hd' ? 'high' : 'medium',
       },
-      body: JSON.stringify({
-        model:   'dall-e-3',
-        prompt:  prompt.trim(),
-        n:       1,          // DALL-E 3 só gera 1 por chamada
-        quality,
-        size,
-      }),
-    });
+    },
+    {
+      model: 'dall-e-2',
+      body: {
+        model: 'dall-e-2',
+        prompt: prompt.trim(),
+        n: 1,
+        size: '1024x1024',
+      },
+    },
+  ];
 
-    const data = await response.json();
+  let lastError = '';
 
-    if (!response.ok) {
-      const msg = data?.error?.message || 'Erro na API da OpenAI';
-      console.error('[image] OpenAI error:', msg);
-      return res.status(response.status).json({ error: msg });
+  for (const tentativa of tentativas) {
+    try {
+      const response = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(tentativa.body),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        lastError = data?.error?.message || `Erro HTTP ${response.status}`;
+        console.warn(`[image] ${tentativa.model} falhou:`, lastError);
+        continue; // tenta o próximo modelo
+      }
+
+      const item = data.data?.[0];
+      if (!item) { lastError = 'Resposta vazia da API'; continue; }
+
+      // gpt-image-1 retorna b64_json; dall-e-2 retorna url ou b64_json
+      let url = item.url || null;
+      if (!url && item.b64_json) {
+        url = `data:image/png;base64,${item.b64_json}`;
+      }
+
+      if (!url) { lastError = 'Nenhuma imagem na resposta'; continue; }
+
+      return res.status(200).json({
+        url,
+        revised_prompt: item.revised_prompt || prompt,
+        model_used: tentativa.model,
+      });
+
+    } catch (err) {
+      lastError = err.message;
+      console.error(`[image] ${tentativa.model} erro:`, err);
     }
-
-    // Retorna a URL da imagem e o prompt revisado pela OpenAI
-    return res.status(200).json({
-      url:            data.data[0].url,
-      revised_prompt: data.data[0].revised_prompt ?? prompt,
-    });
-
-  } catch (err) {
-    console.error('[image] fetch error:', err);
-    return res.status(500).json({ error: 'Erro interno ao chamar a OpenAI' });
   }
+
+  return res.status(500).json({ error: lastError || 'Falha ao gerar imagem' });
 }
