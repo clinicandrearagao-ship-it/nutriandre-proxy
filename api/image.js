@@ -39,12 +39,11 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model:           'dall-e-3',
-        prompt:          prompt.trim(),
-        n:               1,          // DALL-E 3 só gera 1 por chamada
+        model:   'dall-e-3',
+        prompt:  prompt.trim(),
+        n:       1,          // DALL-E 3 só gera 1 por chamada
         quality,
         size,
-        response_format: 'url',
       }),
     });
 
