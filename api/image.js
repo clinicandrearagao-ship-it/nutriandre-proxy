@@ -1,8 +1,7 @@
 // api/image.js — nutriandre-proxy (Vercel)
 // Requer: OPENAI_API_KEY nas variáveis de ambiente do Vercel
 
-// Aumenta o timeout da função para 60s (planos Pro) — livre fica em 10s
-export const maxDuration = 60;
+export const maxDuration = 60; // Pro plan: até 60s | Hobby: ignorado (10s)
 
 export default async function handler(req, res) {
 
@@ -22,29 +21,27 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Prompt inválido ou ausente' });
   }
 
-  // Tamanho DALL-E 3: suporta 1024x1792 nativamente (portrait perfeito para Instagram)
-  const dalleSize = (size === '1024x1792' || size === '1792x1024') ? size : '1024x1024';
-
-  // Tentativas em ordem: DALL-E 3 (amplamente disponível) → DALL-E 2 fallback
+  // DALL-E 2 primeiro: rápido (5-8s), cabe no timeout do Vercel Hobby (10s)
+  // DALL-E 3 como fallback: mais bonito mas mais lento (15-25s), precisa do Pro
   const tentativas = [
+    {
+      model: 'dall-e-2',
+      body: {
+        model: 'dall-e-2',
+        prompt: prompt.trim().slice(0, 1000), // limite DALL-E 2: 1000 chars
+        n: 1,
+        size: '1024x1024',
+        response_format: 'b64_json',
+      },
+    },
     {
       model: 'dall-e-3',
       body: {
         model: 'dall-e-3',
         prompt: prompt.trim(),
         n: 1,
-        size: dalleSize,
+        size: (size === '1024x1792' || size === '1792x1024') ? size : '1024x1024',
         quality: quality === 'hd' ? 'hd' : 'standard',
-        response_format: 'b64_json',
-      },
-    },
-    {
-      model: 'dall-e-2',
-      body: {
-        model: 'dall-e-2',
-        prompt: prompt.trim().slice(0, 1000), // DALL-E 2 limita a 1000 chars
-        n: 1,
-        size: '1024x1024',
         response_format: 'b64_json',
       },
     },
@@ -68,26 +65,22 @@ export default async function handler(req, res) {
       if (!response.ok) {
         lastError = data?.error?.message || `Erro HTTP ${response.status}`;
         console.warn(`[image] ${tentativa.model} falhou:`, lastError);
-        continue; // tenta o próximo modelo
+        continue;
       }
 
       const item = data.data?.[0];
       if (!item) { lastError = 'Resposta vazia da API'; continue; }
 
-      // Retorna b64_json diretamente — evita expiração de URLs
       if (item.b64_json) {
         return res.status(200).json({
           b64_json: item.b64_json,
-          revised_prompt: item.revised_prompt || prompt,
           model_used: tentativa.model,
         });
       }
 
-      // Fallback: URL (dall-e-2 sem response_format)
       if (item.url) {
         return res.status(200).json({
           url: item.url,
-          revised_prompt: item.revised_prompt || prompt,
           model_used: tentativa.model,
         });
       }
