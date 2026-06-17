@@ -1,6 +1,9 @@
 // api/image.js — nutriandre-proxy (Vercel)
 // Requer: OPENAI_API_KEY nas variáveis de ambiente do Vercel
 
+// Aumenta o timeout da função para 60s (planos Pro) — livre fica em 10s
+export const maxDuration = 60;
+
 export default async function handler(req, res) {
 
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,25 +22,30 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Prompt inválido ou ausente' });
   }
 
-  // Tenta gpt-image-1 primeiro (modelo novo), depois dall-e-2 como fallback
+  // Tamanho DALL-E 3: suporta 1024x1792 nativamente (portrait perfeito para Instagram)
+  const dalleSize = (size === '1024x1792' || size === '1792x1024') ? size : '1024x1024';
+
+  // Tentativas em ordem: DALL-E 3 (amplamente disponível) → DALL-E 2 fallback
   const tentativas = [
     {
-      model: 'gpt-image-1',
+      model: 'dall-e-3',
       body: {
-        model: 'gpt-image-1',
+        model: 'dall-e-3',
         prompt: prompt.trim(),
         n: 1,
-        size: size === '1792x1024' ? '1536x1024' : size === '1024x1792' ? '1024x1536' : '1024x1024',
-        quality: quality === 'hd' ? 'high' : 'medium',
+        size: dalleSize,
+        quality: quality === 'hd' ? 'hd' : 'standard',
+        response_format: 'b64_json',
       },
     },
     {
       model: 'dall-e-2',
       body: {
         model: 'dall-e-2',
-        prompt: prompt.trim(),
+        prompt: prompt.trim().slice(0, 1000), // DALL-E 2 limita a 1000 chars
         n: 1,
         size: '1024x1024',
+        response_format: 'b64_json',
       },
     },
   ];
@@ -66,19 +74,25 @@ export default async function handler(req, res) {
       const item = data.data?.[0];
       if (!item) { lastError = 'Resposta vazia da API'; continue; }
 
-      // gpt-image-1 retorna b64_json; dall-e-2 retorna url ou b64_json
-      let url = item.url || null;
-      if (!url && item.b64_json) {
-        url = `data:image/png;base64,${item.b64_json}`;
+      // Retorna b64_json diretamente — evita expiração de URLs
+      if (item.b64_json) {
+        return res.status(200).json({
+          b64_json: item.b64_json,
+          revised_prompt: item.revised_prompt || prompt,
+          model_used: tentativa.model,
+        });
       }
 
-      if (!url) { lastError = 'Nenhuma imagem na resposta'; continue; }
+      // Fallback: URL (dall-e-2 sem response_format)
+      if (item.url) {
+        return res.status(200).json({
+          url: item.url,
+          revised_prompt: item.revised_prompt || prompt,
+          model_used: tentativa.model,
+        });
+      }
 
-      return res.status(200).json({
-        url,
-        revised_prompt: item.revised_prompt || prompt,
-        model_used: tentativa.model,
-      });
+      lastError = 'Nenhuma imagem na resposta';
 
     } catch (err) {
       lastError = err.message;
